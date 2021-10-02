@@ -1,64 +1,137 @@
+# -*- coding: utf-8 -*-
+# Copyright 2018-2019 Streamlit Inc.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#    http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+"""An example of showing geographic data."""
+
 import streamlit as st
-
-import numpy as np
 import pandas as pd
-import time
+import numpy as np
+import altair as alt
+import pydeck as pdk
 
-st.header("My first Python Web App")
+# SETTING PAGE CONFIG TO WIDE MODE
+st.set_page_config(layout="wide")
 
-readme = st.checkbox("readme first")
+# LOADING DATA
+DATE_TIME = "date/time"
+DATA_URL = (
+    "http://s3-us-west-2.amazonaws.com/streamlit-demo-data/uber-raw-data-sep14.csv.gz"
+)
 
-if readme:
+@st.cache(persist=True)
+def load_data(nrows):
+    data = pd.read_csv(DATA_URL, nrows=nrows)
+    lowercase = lambda x: str(x).lower()
+    data.rename(lowercase, axis="columns", inplace=True)
+    data[DATE_TIME] = pd.to_datetime(data[DATE_TIME])
+    return data
 
-    st.write("""
-        This is a web app demo using [streamlit](https://streamlit.io/) library. It is hosted on [heroku](https://www.heroku.com/). You may get the codes via [github](https://github.com/richieyuyongpoh/myfirstapp)
-        """)
+data = load_data(100000)
 
-    st.write ("For more info, please contact:")
+# CREATING FUNCTION FOR MAPS
 
-    st.write("<a href='https://www.linkedin.com/in/yong-poh-yu/'>Dr. Yong Poh Yu </a>", unsafe_allow_html=True)
+def map(data, lat, lon, zoom):
+    st.write(pdk.Deck(
+        map_style="mapbox://styles/mapbox/light-v9",
+        initial_view_state={
+            "latitude": lat,
+            "longitude": lon,
+            "zoom": zoom,
+            "pitch": 50,
+        },
+        layers=[
+            pdk.Layer(
+                "HexagonLayer",
+                data=data,
+                get_position=["lon", "lat"],
+                radius=100,
+                elevation_scale=4,
+                elevation_range=[0, 1000],
+                pickable=True,
+                extruded=True,
+            ),
+        ]
+    ))
 
-option = st.sidebar.selectbox(
-    'Select a mini project',
-     ['line chart','map','T n C','Long Process'])
+# LAYING OUT THE TOP SECTION OF THE APP
+row1_1, row1_2 = st.beta_columns((2,3))
 
+with row1_1:
+    st.title("NYC Uber Ridesharing Data")
+    hour_selected = st.slider("Select hour of pickup", 0, 23)
 
-if option=='line chart':
-    chart_data = pd.DataFrame(
-    np.random.randn(20, 3),
-    columns=['a', 'b', 'c'])
+with row1_2:
+    st.write(
+    """
+    ##
+    Examining how Uber pickups vary over time in New York City's and at its major regional airports.
+    By sliding the slider on the left you can view different slices of time and explore different transportation trends.
+    """)
 
-    st.line_chart(chart_data)
+# FILTERING DATA BY HOUR SELECTED
+data = data[data[DATE_TIME].dt.hour == hour_selected]
 
-elif option=='map':
-    map_data = pd.DataFrame(
-    np.random.randn(1000, 2) / [50, 50] + [37.76, -122.4],
-    columns=['lat', 'lon'])
+# LAYING OUT THE MIDDLE SECTION OF THE APP WITH THE MAPS
+row2_1, row2_2, row2_3, row2_4 = st.beta_columns((2,1,1,1))
 
-    st.map(map_data)
+# SETTING THE ZOOM LOCATIONS FOR THE AIRPORTS
+la_guardia= [40.7900, -73.8700]
+jfk = [40.6650, -73.7821]
+newark = [40.7090, -74.1805]
+zoom_level = 12
+midpoint = (np.average(data["lat"]), np.average(data["lon"]))
 
-elif option=='T n C':
+with row2_1:
+    st.write("**All New York City from %i:00 and %i:00**" % (hour_selected, (hour_selected + 1) % 24))
+    map(data, midpoint[0], midpoint[1], 11)
 
-    st.write('Before you continue, please read the [terms and conditions](https://www.gnu.org/licenses/gpl-3.0.en.html)')
-    show = st.checkbox('I agree the terms and conditions')
-    if show:
-        st.write(pd.DataFrame({
-        'Intplan': ['yes', 'yes', 'yes', 'no'],
-        'Churn Status': [0, 0, 0, 1]
-        }))
+with row2_2:
+    st.write("**La Guardia Airport**")
+    map(data, la_guardia[0],la_guardia[1], zoom_level)
 
+with row2_3:
+    st.write("**JFK Airport**")
+    map(data, jfk[0],jfk[1], zoom_level)
 
-else:
-    'Starting a long computation...'
+with row2_4:
+    st.write("**Newark Airport**")
+    map(data, newark[0],newark[1], zoom_level)
 
-    
-    latest_iteration = st.empty()
-    bar = st.progress(0)
+# FILTERING DATA FOR THE HISTOGRAM
+filtered = data[
+    (data[DATE_TIME].dt.hour >= hour_selected) & (data[DATE_TIME].dt.hour < (hour_selected + 1))
+    ]
 
-    for i in range(100):
-   
-        latest_iteration.text(f'Iteration {i+1}')
-        bar.progress(i + 1)
-        time.sleep(0.1)
+hist = np.histogram(filtered[DATE_TIME].dt.minute, bins=60, range=(0, 60))[0]
 
-    '...and now we\'re done!'
+chart_data = pd.DataFrame({"minute": range(60), "pickups": hist})
+
+# LAYING OUT THE HISTOGRAM SECTION
+
+st.write("")
+
+st.write("**Breakdown of rides per minute between %i:00 and %i:00**" % (hour_selected, (hour_selected + 1) % 24))
+
+st.altair_chart(alt.Chart(chart_data)
+    .mark_area(
+        interpolate='step-after',
+    ).encode(
+        x=alt.X("minute:Q", scale=alt.Scale(nice=False)),
+        y=alt.Y("pickups:Q"),
+        tooltip=['minute', 'pickups']
+    ).configure_mark(
+        opacity=0.5,
+        color='red'
+    ), use_container_width=True)
